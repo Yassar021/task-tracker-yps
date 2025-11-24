@@ -87,20 +87,67 @@ export default function HomePage() {
   };
 
   useEffect(() => {
+    // Add a timeout fallback in case fetchHomeData never completes
+    const dataFetchTimeout = setTimeout(() => {
+      if (loading) {
+        console.log('⏰ Fetch timeout reached, setting sample data...');
+        setSampleData();
+        setLoading(false);
+      }
+    }, 15000); // 15 second timeout fallback
+
     fetchHomeData();
+
+    return () => clearTimeout(dataFetchTimeout);
   }, []);
 
   const fetchHomeData = async () => {
     try {
-      const [classesResponse, assignmentsResponse, weekResponse] = await Promise.all([
-        fetch('/api/classes'),
-        fetch('/api/home/assignments'),
-        fetch('/api/utils/week-info'),
+      console.log('🔄 Starting fetchHomeData...');
+
+      // Fetch data with better error handling and timeout
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Request timeout')), 10000) // 10 second timeout
+      );
+
+      const dataPromise = Promise.all([
+        fetch('/api/classes', {
+          headers: { 'Cache-Control': 'no-cache' },
+          signal: AbortSignal.timeout(8000) // 8 second timeout per request
+        }),
+        fetch('/api/home/assignments', {
+          headers: { 'Cache-Control': 'no-cache' },
+          signal: AbortSignal.timeout(8000)
+        }),
+        fetch('/api/utils/week-info', {
+          headers: { 'Cache-Control': 'no-cache' },
+          signal: AbortSignal.timeout(8000)
+        }),
       ]);
 
+      const [classesResponse, assignmentsResponse, weekResponse] = await Promise.race([
+        dataPromise,
+        timeoutPromise
+      ]);
+
+      console.log('📡 API Responses received:', {
+        classesOk: classesResponse.ok,
+        assignmentsOk: assignmentsResponse.ok,
+        weekOk: weekResponse.ok
+      });
+
       // Check if responses are OK before parsing JSON
-      if (!classesResponse.ok || !assignmentsResponse.ok || !weekResponse.ok) {
-        throw new Error('One or more API requests failed');
+      if (!classesResponse.ok) {
+        console.error('Classes API failed:', classesResponse.status, classesResponse.statusText);
+        throw new Error(`Classes API failed: ${classesResponse.status}`);
+      }
+      if (!assignmentsResponse.ok) {
+        console.error('Assignments API failed:', assignmentsResponse.status, assignmentsResponse.statusText);
+        throw new Error(`Assignments API failed: ${assignmentsResponse.status}`);
+      }
+      if (!weekResponse.ok) {
+        console.error('Week API failed:', weekResponse.status, weekResponse.statusText);
+        throw new Error(`Week API failed: ${weekResponse.status}`);
       }
 
       // Safely parse JSON with error handling
@@ -110,6 +157,12 @@ export default function HomePage() {
         safeJsonParse(weekResponse),
       ]);
 
+      console.log('📊 Parsed data:', {
+        classesCount: classesData.classes?.length || 0,
+        assignmentsCount: assignmentsData.assignments?.length || 0,
+        weekInfo: weekData.weekInfo
+      });
+
       setClasses(classesData.classes || []);
       setAssignments(assignmentsData.assignments || []);
       setCurrentWeek(weekData.weekInfo);
@@ -117,8 +170,11 @@ export default function HomePage() {
       // Calculate status
       const statuses = calculateClassStatuses(classesData.classes || [], assignmentsData.assignments || [], weekData.weekInfo);
       setClassStatuses(statuses);
+
+      console.log('✅ fetchHomeData completed successfully');
     } catch (error) {
-      console.error("Error:", error);
+      console.error("❌ Error in fetchHomeData:", error);
+      console.log("🔄 Falling back to sample data...");
       // If API fails, show sample data
       setSampleData();
     } finally {
@@ -144,6 +200,8 @@ export default function HomePage() {
   };
 
   const setSampleData = () => {
+    console.log('🔧 Setting sample data as fallback...');
+
     // Create sample classes if API fails
     const sampleClasses = [
       { id: '7-DIS', grade: 7, name: 'DISCIPLINE', isActive: true },
@@ -167,12 +225,22 @@ export default function HomePage() {
       { id: '9-COL', grade: 9, name: 'COLLABORATIVE', isActive: true },
       { id: '9-RESI', grade: 9, name: 'RESILIENT', isActive: true },
     ];
-    setClasses(sampleClasses);
+
+    // Set empty assignments since we don't have real data
+    setAssignments([]);
 
     // Set current week info
     const now = new Date();
     const weekNumber = Math.ceil(now.getDate() / 7);
     setCurrentWeek({ weekNumber, year: now.getFullYear() });
+
+    setClasses(sampleClasses);
+
+    // Calculate empty class statuses
+    const statuses = calculateClassStatuses(sampleClasses, [], { weekNumber, year: now.getFullYear() });
+    setClassStatuses(statuses);
+
+    console.log('✅ Sample data set successfully with', sampleClasses.length, 'classes');
   };
 
   const calculateClassStatuses = (classes: Class[], assignments: Assignment[], weekInfo: { weekNumber: number; year: number }): ClassStatus[] => {
@@ -294,6 +362,13 @@ export default function HomePage() {
               Mengambil informasi kelas dan tugas
             </p>
           </div>
+
+          {/* Debug info for production */}
+          {process.env.NODE_ENV === 'production' && (
+            <div className="mt-4 text-xs text-gray-400">
+              <p>Jika loading berlanjut, data akan fallback ke mode demo.</p>
+            </div>
+          )}
         </div>
       </div>
     );
